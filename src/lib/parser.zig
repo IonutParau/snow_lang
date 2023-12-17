@@ -1,0 +1,252 @@
+const std = @import("std");
+
+const Allocator = std.mem.Allocator;
+
+const lexing = @import("lexer.zig");
+const Lexer = lexing.SnowLexer;
+const Token = lexing.SnowToken;
+const TokenKind = lexing.SnowTokenType;
+const TokenKindInfo: std.builtin.Type = @typeInfo(TokenKind);
+const TokenTag = TokenKindInfo.Union.tag_type.?;
+const Source = lexing.SnowSource;
+const errors = @import("errors.zig");
+const Error = errors.SnowError;
+const ErrorStore = errors.SnowErrorStore;
+
+pub const StatementNode = struct {
+    statement: Statement,
+    source: Source,
+};
+
+pub const Statement = union(enum) {
+    assign: struct {
+        expr: *ExpressionNode,
+        to: *ExpressionNode,
+    },
+    ifStatement: struct {
+        condition: *ExpressionNode,
+        body: []StatementNode,
+        fallback: ?[]StatementNode,
+    },
+    matchStatement: []struct {
+        pattern: *PatternNode,
+        body: *StatementNode,
+    },
+    codeblock: []StatementNode,
+    returnStatement: ?*ExpressionNode,
+    defineLocal: struct {
+        name: []const u8,
+        val: ?*ExpressionNode,
+    },
+    defineFunction: struct {
+        name: []const u8,
+        args: []const []const u8,
+        body: []StatementNode,
+    },
+    call: struct {
+        callee: *ExpressionNode,
+        args: []ExpressionNode,
+    },
+};
+
+pub const PatternNode = struct {
+    pattern: Pattern,
+    source: Source,
+};
+
+pub const Pattern = union(enum) {
+    variable: []const u8,
+    field: struct {
+        field: []const u8,
+        of: *PatternNode,
+    },
+    wildcard,
+    defineLocal: []const u8,
+    number: f64,
+    string: []const u8,
+    list: []union(enum) {
+        pattern: *PatternNode,
+        repeating,
+        namedRepeat: []const u8,
+    },
+    tuple: []PatternNode,
+};
+
+pub const ExpressionNode = struct {
+    expression: Expression,
+    source: Source,
+};
+
+pub const Expression = union(enum) {
+    number: f64,
+    string: []const u8,
+    boolean: bool,
+    null,
+    tuple: []ExpressionNode,
+    list: []ExpressionNode,
+    structLiteral: []struct {
+        field: []const u8,
+        value: *ExpressionNode,
+    },
+    tableLiteral: []struct {
+        field: *ExpressionNode,
+        value: *ExpressionNode,
+    },
+    variable: []const u8,
+    ifExpr: struct {
+        condition: *ExpressionNode,
+        body: *ExpressionNode,
+        fallback: *ExpressionNode,
+    },
+    matchExpr: []struct {
+        pattern: *PatternNode,
+        response: *ExpressionNode,
+    },
+    codeblock: []ExpressionNode,
+    returnExpr: ?*ExpressionNode,
+    shortLambda: struct {
+        args: []const []const u8,
+        expr: *ExpressionNode,
+    },
+    longLambda: struct {
+        args: []const []const u8,
+        body: []ExpressionNode,
+    },
+    call: struct {
+        callee: *ExpressionNode,
+        args: []ExpressionNode,
+    },
+    field: struct {
+        expr: *ExpressionNode,
+        name: []const u8,
+    },
+    index: struct {
+        expr: *ExpressionNode,
+        idx: *ExpressionNode,
+    },
+    opcode: struct {
+        a: *ExpressionNode,
+        b: *ExpressionNode,
+        op: enum { Add, Sub, Mult, Div, IntDiv, Power, Mod },
+    },
+};
+
+pub const Parser = struct {
+    error_store: *ErrorStore,
+    lexer: Lexer,
+    allocator: Allocator,
+
+    const Self = @This();
+
+    pub fn init(file: []const u8, code: []const u8, allocator: Allocator, error_store: *ErrorStore) Self {
+        var lexer = Lexer.init(file, code, error_store, allocator);
+
+        return .{
+            .error_store = error_store,
+            .lexer = lexer,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn alloc(self: *Self, x: anytype) !*@TypeOf(x) {
+        var p = try self.allocator.alloc(@TypeOf(x));
+        p.* = x;
+        return p;
+    }
+
+    pub fn parseStatement(self: *Self) Error!StatementNode {
+        _ = self;
+    }
+
+    pub fn isValidAssignee(expr: *ExpressionNode) bool {
+        return switch (expr.expression) {
+            .tuple => |t| {
+                for (t) |e| {
+                    if (!Self.isValidAssignee(e)) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            .list => |t| {
+                for (t) |e| {
+                    if (!Self.isValidAssignee(e)) {
+                        return false;
+                    }
+                }
+                return true;
+            },
+            .variable => true,
+            .field => true,
+            .index => true,
+            else => false,
+        };
+    }
+
+    pub fn checkDone(self: *Self, token: ?Token) Error!Token {
+        if (token) |t| {
+            return t;
+        }
+
+        self.error_store.* = try ErrorStore.fmt("Syntax Error: Code ends abruptly", .{}, self.allocator, self.lexer.source);
+        return Error.SyntaxError;
+    }
+
+    fn nextToken(self: *Self) Error!Token {
+        return self.checkDone(try self.lexer.next());
+    }
+
+    fn peekToken(self: *Self) Error!Token {
+        return self.checkDone(try self.lexer.peek());
+    }
+
+    pub fn parseExpression(self: *Self) Error!ExpressionNode {
+        const token = try self.nextToken();
+        const tag = @as(TokenTag, token.kind);
+
+        if (tag == .numberLiteral) {
+            return ExpressionNode{ .expression = .{ .number = token.kind.numberLiteral }, .source = token.source };
+        }
+
+        if (tag == .stringLiteral) {
+            const str = try self.allocator.dupe(u8, token.kind.stringLiteral);
+            return ExpressionNode{ .expression = .{ .string = str }, .source = token.source };
+        }
+
+        if (tag == .identifier) {
+            const ident = try self.allocator.dupe(u8, token.kind.identifier);
+            return ExpressionNode{ .expression = .{ .variable = ident }, .source = token.source };
+        }
+
+        if (tag == .trueKeyword or tag == .falseKeyword) {
+            return ExpressionNode{ .expression = .{ .boolean = (tag == .trueKeyword) }, .source = token.source };
+        }
+
+        if (tag == .nullKeyword) {
+            return ExpressionNode{ .expression = .null, .source = token.source };
+        }
+
+        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
+        return Error.SyntaxError;
+    }
+
+    pub fn parseExpressionOps(self: *Self, bias: usize) Error!ExpressionNode {
+        _ = bias;
+        return self.parseExpression();
+    }
+
+    pub fn parsePattern(self: *Self) Error!PatternNode {
+        _ = self;
+    }
+
+    pub fn parse(self: *Self) Error![]StatementNode {
+        var asts = std.ArrayList(StatementNode).init(self.allocator);
+        errdefer asts.deinit();
+
+        while (!self.lexer.done()) {
+            try asts.append(try self.parseStatement());
+        }
+
+        return asts.items;
+    }
+};
