@@ -196,8 +196,30 @@ pub const Parser = struct {
         return self.checkDone(try self.lexer.next());
     }
 
+    fn expectNextToken(self: *Self, kind: TokenKind, comptime msg: []const u8) Error!Token {
+        const token = try self.nextToken();
+
+        if (token.kind.eq(kind)) {
+            return token;
+        }
+
+        self.error_store.* = try ErrorStore.fmt(msg, .{}, self.allocator, token.source);
+        return Error.SyntaxError;
+    }
+
     fn peekToken(self: *Self) Error!Token {
         return self.checkDone(try self.lexer.peek());
+    }
+
+    fn expectPeekToken(self: *Self, kind: TokenKind, comptime msg: []const u8) Error!Token {
+        const token = try self.peekToken();
+
+        if (token.kind.eq(kind)) {
+            return token;
+        }
+
+        self.error_store.* = try ErrorStore.fmt(msg, .{}, self.allocator, token.source);
+        return Error.SyntaxError;
     }
 
     pub fn parseExpression(self: *Self) Error!ExpressionNode {
@@ -224,6 +246,62 @@ pub const Parser = struct {
 
         if (tag == .nullKeyword) {
             return ExpressionNode{ .expression = .null, .source = token.source };
+        }
+
+        if (tag == .openParen) {
+            const expr = self.parseExpressionOps(0);
+            const firstComma = try self.nextToken();
+
+            if (firstComma.kind.eq(.closeParen)) {
+                return expr;
+            } else if (firstComma.kind.eq(.comma)) {
+                // We go full tuple mode
+                var tuple = std.ArrayList(i32).init(self.allocator);
+                errdefer tuple.deinit();
+
+                while (true) {
+                    const e = try self.parseExpressionOps(self, 0);
+                    try tuple.append(e);
+                    const t = try self.nextToken();
+                    if (t.kind.eq(.comma)) {
+                        continue;
+                    } else if (t.kind.eq(.closeParen)) {
+                        break;
+                    } else {
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, token.source);
+                        return Error.SyntaxError;
+                    }
+                }
+
+                return ExpressionNode{ .expression = .{ .tuple = tuple.items }, .source = token.source };
+            } else {
+                self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, token.source);
+                return Error.SyntaxError;
+            }
+        }
+
+        if (tag == .openBracket) {
+            var l = std.ArrayList(Expression).init(self.allocator);
+            errdefer l.deinit();
+
+            if ((try self.peekToken()).kind.eq(.closeBracket)) {
+                _ = try self.nextToken();
+            } else while (true) {
+                const e = try self.parseExpressionOps(self, 0);
+                try l.append(e);
+
+                const t = try self.nextToken();
+                if (t.kind.eq(.comma)) {
+                    continue;
+                } else if (t.kind.eq(.closeParen)) {
+                    break;
+                } else {
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, token.source);
+                    return Error.SyntaxError;
+                }
+            }
+
+            return ExpressionNode{ .expression = .{ .list = l.items }, .source = token.source };
         }
 
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
