@@ -9,6 +9,5 @@ Overall: In development.
 More specific:
 - Lexer (DONE)
 - Parser (IN DEVELOPMENT)
-- Semantic Analyzer (NOT STARTED)
-- Bytecode Code Generator (NOT STARTED)
+- Bytecode Code Generator (IN DEVELOPMENT)
 - Runtime (NOT STARTED)
