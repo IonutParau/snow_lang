@@ -28,6 +28,10 @@ pub const Statement = union(enum) {
         body: []StatementNode,
         fallback: ?[]StatementNode,
     },
+    whileLoop: struct {
+        condition: *ExpressionNode,
+        body: []StatementNode,
+    },
     matchStatement: []struct {
         pattern: *PatternNode,
         body: *StatementNode,
@@ -42,6 +46,7 @@ pub const Statement = union(enum) {
         name: []const u8,
         args: []const []const u8,
         body: []StatementNode,
+        local: bool,
     },
     call: struct {
         callee: *ExpressionNode,
@@ -155,7 +160,25 @@ pub const Parser = struct {
     }
 
     pub fn parseStatement(self: *Self) Error!StatementNode {
-        _ = self;
+        var token = try self.nextToken();
+
+        if (token.kind.eq(.localKeyword)) {
+            // Name
+            const name = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+            const local_name = try self.allocator.dupe(name.kind.identifier);
+            const t = try self.peekToken();
+            if (t.kind.eq(.assign)) {
+                _ = try self.nextToken();
+                var expr = try self.parseExpressionOps(0);
+
+                return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = expr } }, .source = token.source };
+            }
+
+            return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = null } }, .source = token.source };
+        }
+
+        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, self.lexer.source);
+        return Error.SyntaxError;
     }
 
     pub fn isValidAssignee(expr: *ExpressionNode) bool {
@@ -196,10 +219,10 @@ pub const Parser = struct {
         return self.checkDone(try self.lexer.next());
     }
 
-    fn expectNextToken(self: *Self, kind: TokenKind, comptime msg: []const u8) Error!Token {
+    fn expectNextToken(self: *Self, kind: TokenTag, comptime msg: []const u8) Error!Token {
         const token = try self.nextToken();
 
-        if (token.kind.eq(kind)) {
+        if (@as(TokenTag, token.kind) == kind) {
             return token;
         }
 
@@ -211,10 +234,10 @@ pub const Parser = struct {
         return self.checkDone(try self.lexer.peek());
     }
 
-    fn expectPeekToken(self: *Self, kind: TokenKind, comptime msg: []const u8) Error!Token {
+    fn expectPeekToken(self: *Self, kind: TokenTag, comptime msg: []const u8) Error!Token {
         const token = try self.peekToken();
 
-        if (token.kind.eq(kind)) {
+        if (@as(TokenTag, token.kind) == kind) {
             return token;
         }
 
