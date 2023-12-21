@@ -178,6 +178,13 @@ pub const SnowValue = union(enum) {
     structValue: *struct {
         marked: bool,
         map: std.StringHashMap(SnowValue),
+        meta: std.StringHashMap(SnowValue),
+    },
+    userdata: *struct {
+        // Never disposed, no need for marked.
+        // May want to add OwnedUserData, which can have a finalizer.
+        memory: [*]const u8,
+        meta: std.StringHashMap(SnowValue),
     },
     null: void,
 
@@ -204,6 +211,10 @@ pub const SnowValue = union(enum) {
             .structValue => {
                 self.structValue.map.deinit();
                 allocator.destroy(self.structValue);
+            },
+            .userdata => {
+                self.userdata.meta.deinit();
+                allocator.destroy(self.userdata);
             },
             else => {},
         }
@@ -259,6 +270,16 @@ pub const SnowValue = union(enum) {
                 while (t.next()) |v| {
                     v.mark();
                 }
+                var mt = self.structValue.meta.valueIterator();
+                while (mt.next()) |v| {
+                    v.mark();
+                }
+            },
+            .userdata => {
+                var t = self.userdata.meta.valueIterator();
+                while (t.next()) |v| {
+                    v.mark();
+                }
             },
             else => {},
         }
@@ -295,6 +316,7 @@ pub const SnowValue = union(enum) {
 
                 return h;
             },
+            .userdata => |u| @intFromPtr(u),
         };
     }
 

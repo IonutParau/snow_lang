@@ -67,9 +67,11 @@ pub const SnowTokenType = union(enum) {
     assign, // =
     equals, // ==
     notEquals, // !=
+    colon, // :
 
     // Keyword
     funKeyword,
+    structKeyword,
     forKeyword,
     inKeyword,
     isKeyword,
@@ -198,6 +200,7 @@ pub const SnowLexer = struct {
             .{ .kind = .equals, .text = "==" },
             .{ .kind = .notEquals, .text = "!=" },
             .{ .kind = .assign, .text = "=" },
+            .{ .kind = .colon, .text = ":" },
         };
         inline for (symbols) |symbol| {
             const i = self.char_idx + symbol.text.len;
@@ -371,7 +374,7 @@ pub const SnowLexer = struct {
 const testing = std.testing;
 
 test "Lexing" {
-    const code = "( ) [ ] { } + - * / // ^ > < >= <= == != = . .. ... , | ; 5 5.3 5.32 x hello fun in is local while if else do try catch return continue break and or not true false null 'hello there'";
+    const code = "( ) [ ] { } + - * / // ^ > < >= <= == != = . .. ... , | ; 5 5.3 5.32 x hello fun in is local while if else do try catch return continue break and or not true false null struct 'hello there'";
     var error_store = errors.SnowErrorStore.empty();
     errdefer error_store.deinit();
 
@@ -429,6 +432,7 @@ test "Lexing" {
         .trueKeyword,
         .falseKeyword,
         .nullKeyword,
+        .structKeyword,
         .{ .stringLiteral = "hello there" },
     };
 

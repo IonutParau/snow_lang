@@ -82,6 +82,17 @@ pub const ExpressionNode = struct {
     source: Source,
 };
 
+const StructPair = struct {
+    field: []const u8,
+    isMeta: bool,
+    value: *ExpressionNode,
+};
+
+const TablePair = struct {
+    field: *ExpressionNode,
+    value: *ExpressionNode,
+};
+
 pub const Expression = union(enum) {
     number: f64,
     string: []const u8,
@@ -89,14 +100,8 @@ pub const Expression = union(enum) {
     null,
     tuple: []ExpressionNode,
     list: []ExpressionNode,
-    structLiteral: []struct {
-        field: []const u8,
-        value: *ExpressionNode,
-    },
-    tableLiteral: []struct {
-        field: *ExpressionNode,
-        value: *ExpressionNode,
-    },
+    structLiteral: []StructPair,
+    tableLiteral: []TablePair,
     variable: []const u8,
     ifExpr: struct {
         condition: *ExpressionNode,
@@ -466,6 +471,74 @@ pub const Parser = struct {
             }
 
             return ExpressionNode{ .expression = .{ .list = l.items }, .source = token.source };
+        }
+
+        if (tag == .openCurly) {
+            var l = std.ArrayList(TablePair).init(self.allocator);
+            errdefer l.deinit();
+
+            const pt = try self.peekToken();
+            if (pt.kind == .closeCurly) {
+                _ = try self.nextToken();
+                return ExpressionNode{ .expression = .{ .tableLiteral = l.items }, .source = token.source };
+            }
+
+            while (true) {
+                const key = try self.parseExpressionOps(0);
+                _ = try self.expectNextToken(.assign, "Syntax Error: Expected =");
+                const value = try self.parseExpressionOps(0);
+
+                var keyp = try self.allocator.create(ExpressionNode);
+                var valuep = try self.allocator.create(ExpressionNode);
+
+                keyp.* = key;
+                valuep.* = value;
+
+                try l.append(.{ .key = keyp, .value = valuep });
+
+                const nt = try self.nextToken();
+                if (nt.kind == .comma) {
+                    const npt = try self.peekToken();
+                    if (npt.kind == .closeCurly) {
+                        _ = try self.nextToken();
+                        break;
+                    }
+                } else if (nt.kind == .closeCurly) {
+                    break;
+                } else {
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected {} or ,", .{"}"}, self.allocator, nt.source);
+                    return Error.SyntaxError;
+                }
+            }
+
+            return ExpressionNode{ .expression = .{ .tableLiteral = l.items }, .source = token.source };
+        }
+
+        if (tag == .structKeyword) {
+            _ = try self.expectNextToken(.openCurly, "Syntax Error: Expected \\{");
+            var l = std.ArrayList(StructPair).init(self.allocator);
+            errdefer l.deinit();
+
+            const ending = try self.peekToken();
+            if (ending.kind == .closeCurly) {
+                return ExpressionNode{ .expression = .{ .structLiteral = l.items }, .source = token.source };
+            }
+
+            while (true) {
+                const pt = try self.peekToken();
+                if (pt.kind == .identifier) {
+                    std.debug.panic("Struct fields not implemented yet", .{});
+                } else if (pt.kind == .colon) {
+                    std.debug.panic("Struct metafields not implemented yet", .{});
+                } else if (pt.kind == .funKeyword) {
+                    std.debug.panic("Struct methods not implemented", .{});
+                } else {
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected identifier, : or fun", .{}, self.allocator, pt.source);
+                    return Error.SyntaxError;
+                }
+            }
+
+            return ExpressionNode{ .expression = .{ .structLiteral = l.items }, .source = token.source };
         }
 
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
