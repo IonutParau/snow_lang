@@ -136,6 +136,53 @@ pub const Expression = union(enum) {
     },
 };
 
+fn ValueToSExpression(allocator: Allocator, node: anytype) ![]const u8 {
+    const t: std.builtin.Type = @typeInfo(@TypeOf(node));
+    switch (t) {
+        .Int, .Float => {
+            return std.fmt.allocPrint(allocator, "{}", .{node});
+        },
+        .Enum => {
+            return std.fmt.allocPrint(allocator, "({s} {s})", .{ @typeName(@TypeOf(node)), @tagName(node) });
+        },
+        .Union => |u| {
+            const typeName = @typeName(@TypeOf(node));
+            const tagName = @tagName(node);
+
+            inline for (u.fields) |field| {
+                if (comptime std.mem.eql(u8, tagName, field.name)) {
+                    const v = @field(node, field.name);
+                    const m = try ValueToSExpression(allocator, v);
+                    defer allocator.free(m);
+                    return std.fmt.allocPrint(allocator, "({s} {s} {s})", .{ typeName, tagName, m });
+                }
+            }
+        },
+        .Struct => |s| {
+            const typeName = @typeName(@TypeOf(node));
+            var m = std.fmt.allocPrint("({s}", .{typeName});
+
+            inline for (s.fields) |field| {
+                const v = @field(node, field.name);
+                const vm = ValueToSExpression(allocator, v);
+                defer allocator.free(vm);
+
+                m = try std.fmt.allocPrint(" ({s} {s})", .{ field.name, vm });
+            }
+
+            m = try std.fmt.allocPrint("{s})", .{m});
+            return m;
+        },
+        .Pointer => |p| {
+            switch (p.size) {
+                .One => return ValueToSExpression(node.*),
+                else => return std.fmt.allocPrint("{s}", .{node}),
+            }
+        },
+        else => @compileError("ValueToSExpression does not support" ++ @typeName(@TypeOf(node))),
+    }
+}
+
 pub const Parser = struct {
     error_store: *ErrorStore,
     lexer: Lexer,
@@ -260,7 +307,92 @@ pub const Parser = struct {
 
         if (tag == .identifier) {
             const ident = try self.allocator.dupe(u8, token.kind.identifier);
-            return ExpressionNode{ .expression = .{ .variable = ident }, .source = token.source };
+            var node = ExpressionNode{ .expression = .{ .variable = ident }, .source = token.source };
+
+            while (!self.lexer.done()) {
+                const t = try self.peekToken();
+                switch (t) {
+                    .dot => {
+                        // Field access
+                        _ = try self.nextToken();
+                        const field = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                        const v = try self.allocator.create(ExpressionNode);
+                        v.* = node;
+                        node = ExpressionNode{ .expression = .{ .field = .{ .expr = v, .name = field.kind.identifier } }, .source = t.source };
+                    },
+                    .openBracket => {
+                        // Potential index
+
+                        // Indexing must be on the same line
+                        // This is to disambiguate between
+                        // local v = name[hello]
+                        // And
+                        // local v = name
+                        // [hello] = v
+                        // This could also be fixed with Automatic Semicolon Insertion, but I'm lazy
+                        if (t.source.line != node.source.line) {
+                            break;
+                        }
+
+                        _ = try self.nextToken();
+                        const e = try self.parseExpressionOps(0);
+                        const ep = try self.allocator.create(ExpressionNode);
+                        ep.* = e;
+                        const v = self.allocator.create(ExpressionNode);
+                        v.* = node;
+                        node = ExpressionNode{ .expression = .{ .index = .{ .expr = v, .idx = ep } }, .source = t.source };
+                    },
+                    .openParen => {
+                        // Potential call
+
+                        // Calls must be on the same line too
+                        // This is to diambiguate between
+                        // local v = foo(bar)
+                        // And
+                        // local v = foo
+                        // (bar) = v
+                        if (t.source.line != node.source.line) {
+                            break;
+                        }
+
+                        _ = try self.nextToken();
+                        const ct = try self.peekToken();
+                        if (ct.kind == .closeParen) {
+                            _ = try self.nextToken();
+                            const a = self.allocator.alloc(ExpressionNode, 0);
+                            const v = self.allocator.create(ExpressionNode);
+                            v.* = node;
+                            node = ExpressionNode{ .expression = .{ .call = .{ .callee = v, .args = a } }, .source = t.source };
+                        } else {
+                            const l = std.ArrayList(ExpressionNode).init(self.allocator);
+                            errdefer l.deinit();
+                            const e = try self.parseExpressionOps(0);
+                            try l.append(e);
+
+                            while (true) {
+                                const nt = try self.nextToken();
+                                if (nt.kind == .comma) {
+                                    if ((try self.peekToken()).kind == .closeParen) {
+                                        _ = try self.nextToken();
+                                        break; // Trailing comma is a life saver
+                                    }
+                                    const ne = try self.parseExpressionOps(0);
+                                    try l.append(ne);
+                                } else if (nt.kind == .closeParen) {
+                                    break; // Call done
+                                }
+                            }
+
+                            const v = self.allocator.create(ExpressionNode);
+                            v.* = node;
+                            node = ExpressionNode{ .expression = .{ .call = .{ .calle = v, .args = l.items } }, .source = t.source };
+                        }
+                    },
+                    else => break, // Just give up otherwise
+                }
+            }
+
+            return node;
         }
 
         if (tag == .trueKeyword or tag == .falseKeyword) {
