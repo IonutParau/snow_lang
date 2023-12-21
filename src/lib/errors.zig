@@ -68,13 +68,19 @@ pub const SnowErrorStore = struct {
         const writer = stderr.writer();
 
         // Ignore errors
-        writer.print("{s}\nAt: {s}:{}:{}", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column }) catch unreachable;
+        writer.print("{s}\nAt: {s}:{}:{}\n", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column }) catch unreachable;
     }
 
     pub fn dumpTesting(self: *Self) void {
         if (self.msg == null) return;
 
-        std.debug.print("{s}\nAt: {s}:{}:{}", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column });
+        std.debug.print("{s}\nAt: {s}:{}:{}\n", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column });
+    }
+
+    pub fn panic(self: *Self) void {
+        if (self.msg == null) return;
+
+        std.debug.panic("{s}\nAt: {s}:{}:{}\n", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column });
     }
 
     pub fn deinit(self: *Self) void {

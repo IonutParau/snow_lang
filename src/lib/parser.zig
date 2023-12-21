@@ -338,6 +338,7 @@ pub const Parser = struct {
 
                         _ = try self.nextToken();
                         const e = try self.parseExpressionOps(0);
+                        _ = try self.expectNextToken(.closeBracket, "Syntax Error: Expected ]");
                         const ep = try self.allocator.create(ExpressionNode);
                         ep.* = e;
                         const v = try self.allocator.create(ExpressionNode);
@@ -406,7 +407,7 @@ pub const Parser = struct {
         }
 
         if (tag == .openParen) {
-            const expr = self.parseExpressionOps(0);
+            const expr = try self.parseExpressionOps(0);
             const firstComma = try self.nextToken();
 
             if (firstComma.kind.eq(.closeParen)) {
@@ -414,6 +415,7 @@ pub const Parser = struct {
             } else if (firstComma.kind.eq(.comma)) {
                 // We go full tuple mode
                 var tuple = std.ArrayList(ExpressionNode).init(self.allocator);
+                try tuple.append(expr);
                 errdefer tuple.deinit();
 
                 while (true) {
@@ -425,7 +427,7 @@ pub const Parser = struct {
                     } else if (t.kind.eq(.closeParen)) {
                         break;
                     } else {
-                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, token.source);
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, t.source);
                         return Error.SyntaxError;
                     }
                 }
@@ -449,11 +451,16 @@ pub const Parser = struct {
 
                 const t = try self.nextToken();
                 if (t.kind.eq(.comma)) {
+                    const ot = try self.peekToken();
+                    if (ot.kind == .closeBracket) {
+                        _ = try self.nextToken();
+                        break;
+                    }
                     continue;
-                } else if (t.kind.eq(.closeParen)) {
+                } else if (t.kind.eq(.closeBracket)) {
                     break;
                 } else {
-                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, token.source);
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ] or ,", .{}, self.allocator, t.source);
                     return Error.SyntaxError;
                 }
             }
@@ -471,8 +478,9 @@ pub const Parser = struct {
     }
 
     pub fn parsePattern(self: *Self) Error!PatternNode {
-        _ = self;
-        std.debug.panic("Not implemented yet, sorry", .{});
+        const token = try self.nextToken();
+        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected pattern", .{}, self.allocator, token.source);
+        return errors.SnowError.SyntaxError;
     }
 
     pub fn parse(self: *Self) Error![]StatementNode {
@@ -492,7 +500,7 @@ pub const Parser = struct {
 };
 
 test "Parser can parse basic expressions" {
-    var error_store: ErrorStore = undefined;
+    var error_store = ErrorStore.empty();
     errdefer error_store.dumpTesting();
 
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -514,4 +522,41 @@ test "Parser can parse basic expressions" {
     try std.testing.expect(std.mem.eql(u8, f.expression.variable, "x"));
 
     try std.testing.expect(parser.done()); // Parser should say it is done
+}
+
+test "Parser can parse complex expressions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var error_store = ErrorStore.empty();
+    errdefer error_store.panic();
+
+    var parser = Parser.init("test.snow", "[20, 30, 40] (10, 20, 30) x() x.b x[y]", arena.allocator(), &error_store);
+
+    const a = try parser.parseExpression();
+    const b = try parser.parseExpression();
+    const c = try parser.parseExpression();
+    const d = try parser.parseExpression();
+    const e = try parser.parseExpression();
+
+    try std.testing.expectEqual(a.expression.list.len, 3);
+    try std.testing.expect(a.expression.list[0].expression.number == 20);
+    try std.testing.expect(a.expression.list[1].expression.number == 30);
+    try std.testing.expect(a.expression.list[2].expression.number == 40);
+
+    try std.testing.expectEqual(b.expression.tuple.len, 3);
+    try std.testing.expect(b.expression.tuple[0].expression.number == 10);
+    try std.testing.expect(b.expression.tuple[1].expression.number == 20);
+    try std.testing.expect(b.expression.tuple[2].expression.number == 30);
+
+    try std.testing.expect(c.expression.call.args.len == 0);
+    try std.testing.expectEqualStrings("x", c.expression.call.callee.expression.variable);
+
+    try std.testing.expectEqualStrings(d.expression.field.name, "b");
+    try std.testing.expectEqualStrings(d.expression.field.expr.expression.variable, "x");
+
+    try std.testing.expectEqualStrings(e.expression.index.idx.expression.variable, "y");
+    try std.testing.expectEqualStrings(e.expression.index.expr.expression.variable, "x");
+
+    try std.testing.expect(parser.done()); // Parser should be done by now
 }

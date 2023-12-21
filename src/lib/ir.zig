@@ -1,5 +1,9 @@
 const std = @import("std");
 
+const values = @import("value.zig");
+
+const SnowValue = values.SnowValue;
+
 const Allocator = std.mem.Allocator;
 
 pub const Action = union(enum) {};
@@ -24,5 +28,6 @@ pub const CodeBlock = struct {
 pub const BuildContext = struct {
     upvalues: std.StringHashMap(usize),
     locals: std.StringHashMap(usize),
+    constants: std.StringHashMap(SnowValue),
     allocator: Allocator,
 };
