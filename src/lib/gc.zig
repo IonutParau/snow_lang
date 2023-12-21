@@ -34,8 +34,19 @@ pub const GarbageCollector = struct {
     }
 
     pub fn deinit(self: Self) void {
-        self.cells.deinit();
-        self.values.deinit();
+        var cell = self.cells.first;
+        while (cell) |c| {
+            cell = c.next;
+            c.data.deinit(self.allocator);
+            self.allocator.destroy(c);
+        }
+
+        var value = self.values.first;
+        while (value) |v| {
+            value = v.next;
+            v.data.deinit(self.allocator);
+            self.allocator.destroy(v);
+        }
     }
 
     pub fn addValue(self: *Self, value: SnowValue) !*SnowValue {
@@ -55,13 +66,14 @@ pub const GarbageCollector = struct {
 
     pub fn mark(self: *const Self, stack: SnowStack) void {
         _ = self;
-        const frame = stack.wholeStackFrame();
+        var frame = stack.wholeStackFrame();
 
         // TODO: Multi-threaded marking
 
-        for (frame) |cell| {
-            cell.setMarked(true);
-            cell.read().mark();
+        var i: usize = 0;
+        while (i < frame.len) : (i += 1) {
+            frame[i].setMarked(true);
+            frame[i].get().mark();
         }
     }
 
@@ -88,7 +100,7 @@ pub const GarbageCollector = struct {
                     node.data.setMarked(false);
                 } else {
                     node.data.deinit(self.allocator);
-                    self.values.remove(node);
+                    self.cells.remove(node);
                     self.allocator.destroy(node);
                 }
             }

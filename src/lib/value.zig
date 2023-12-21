@@ -26,28 +26,35 @@ pub const SnowCell = union(enum) {
     const Self = @This();
 
     pub inline fn isMarked(self: *const Self) bool {
-        return switch (self) {
+        return switch (self.*) {
             .shared => self.shared.marked,
             .local => true,
         };
     }
 
     pub inline fn setMarked(self: *Self, marked: bool) void {
-        switch (self) {
+        switch (self.*) {
             .shared => self.shared.marked = marked,
             else => {},
         }
     }
 
     pub fn read(self: *const Self) SnowValue {
-        return switch (self) {
+        return switch (self.*) {
             .shared => |s| s.value.*,
             .local => |l| l,
         };
     }
 
+    pub fn get(self: *Self) *SnowValue {
+        return switch (self.*) {
+            .shared => |s| s.value,
+            .local => &self.local,
+        };
+    }
+
     pub fn write(self: *Self, value: SnowValue) void {
-        switch (self) {
+        switch (self.*) {
             .shared => |s| s.value.* = value,
             .local => self.local = value,
         }
@@ -82,7 +89,7 @@ pub const SnowStack = struct {
     frame_end: usize,
     allocator: Allocator,
     store: *SnowErrorStore,
-    startptr: *SnowCell,
+    startptr: [*]SnowCell,
 
     const Self = @This();
 
@@ -105,7 +112,7 @@ pub const SnowStack = struct {
     }
 
     pub fn wholeStackFrame(self: *const Self) []SnowCell {
-        const frame: []SnowCell = undefined;
+        var frame: []SnowCell = undefined;
         frame.ptr = self.startptr;
         frame.len = self.frame_idx + self.frame_end;
 
@@ -172,6 +179,7 @@ pub const SnowValue = union(enum) {
         marked: bool,
         map: std.StringHashMap(SnowValue),
     },
+    null: void,
 
     const Self = @This();
 
@@ -202,7 +210,7 @@ pub const SnowValue = union(enum) {
     }
 
     pub inline fn isMarked(self: *const Self) bool {
-        return switch (self) {
+        return switch (self.*) {
             .string => self.string.marked,
             .tuple => self.tuple.marked,
             .list => self.list.marked,
@@ -213,7 +221,7 @@ pub const SnowValue = union(enum) {
     }
 
     pub inline fn setMarked(self: *Self, marked: bool) void {
-        switch (self) {
+        switch (self.*) {
             .string => self.string.marked = marked,
             .tuple => self.tuple.marked = marked,
             .list => self.list.marked = marked,
@@ -227,28 +235,28 @@ pub const SnowValue = union(enum) {
         if (self.isMarked()) return;
         self.setMarked(true);
 
-        switch (self) {
+        switch (self.*) {
             .tuple => {
-                const t = self.tuple.values;
-                for (t) |v| {
-                    v.mark();
+                var i: usize = 0;
+                while (i < self.tuple.values.len) {
+                    self.tuple.values[i].mark();
                 }
             },
             .list => {
-                const l = self.list.values.items;
-                for (l) |v| {
-                    v.mark();
+                var i: usize = 0;
+                while (i < self.list.values.items.len) {
+                    self.list.values.items[i].mark();
                 }
             },
             .table => {
-                const t = self.table.map.valueIterator();
-                for (t) |v| {
+                var t = self.table.map.valueIterator();
+                while (t.next()) |v| {
                     v.mark();
                 }
             },
             .structValue => {
-                const t = self.structValue.map.valueIterator();
-                for (t) |v| {
+                var t = self.structValue.map.valueIterator();
+                while (t.next()) |v| {
                     v.mark();
                 }
             },
@@ -257,13 +265,14 @@ pub const SnowValue = union(enum) {
     }
 
     pub fn hash(self: *const Self) usize {
-        return switch (self) {
+        return switch (self.*) {
             .number => |n| {
                 const b: u64 = @bitCast(n);
                 const h: usize = @intCast(b);
                 return h;
             },
             .boolean => |b| if (b) 1 else 0,
+            .null => 0,
             .string => {
                 var h: usize = 5381;
 
@@ -271,7 +280,7 @@ pub const SnowValue = union(enum) {
                     h = ((h << 5) +% h) +% c;
                 }
 
-                return hash;
+                return h;
             },
             .list => |l| @intFromPtr(l),
             .table => |t| @intFromPtr(t),
@@ -292,11 +301,11 @@ pub const SnowValue = union(enum) {
     pub fn directly_equals(self: *const Self, other: *const Self) bool {
         const tag: type = @typeInfo(Self).Union.tag_type.?;
 
-        if (@as(tag, self) != @as(tag, other)) {
+        if (@as(tag, self.*) != @as(tag, other.*)) {
             return false;
         }
 
-        return switch (self) {
+        return switch (self.*) {
             .number => |n| n == other.number,
             .boolean => |b| b == other.boolean,
             .string => |s| std.mem.eql(u8, s.str, other.string.str),
@@ -319,6 +328,7 @@ pub const SnowValue = union(enum) {
             .list => |l| l == self.list,
             .table => |t| t == self.table,
             .structValue => |s| s == self.structValue,
+            .null => true,
         };
     }
 };

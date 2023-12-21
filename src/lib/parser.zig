@@ -212,13 +212,15 @@ pub const Parser = struct {
         if (token.kind.eq(.localKeyword)) {
             // Name
             const name = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
-            const local_name = try self.allocator.dupe(name.kind.identifier);
+            const local_name = try self.allocator.dupe(u8, name.kind.identifier);
             const t = try self.peekToken();
             if (t.kind.eq(.assign)) {
                 _ = try self.nextToken();
                 var expr = try self.parseExpressionOps(0);
+                var e = try self.allocator.create(ExpressionNode);
+                e.* = expr;
 
-                return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = expr } }, .source = token.source };
+                return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = e } }, .source = token.source };
             }
 
             return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = null } }, .source = token.source };
@@ -228,7 +230,7 @@ pub const Parser = struct {
         return Error.SyntaxError;
     }
 
-    pub fn isValidAssignee(expr: *ExpressionNode) bool {
+    pub fn isValidAssignee(expr: ExpressionNode) bool {
         return switch (expr.expression) {
             .tuple => |t| {
                 for (t) |e| {
@@ -311,7 +313,7 @@ pub const Parser = struct {
 
             while (!self.lexer.done()) {
                 const t = try self.peekToken();
-                switch (t) {
+                switch (t.kind) {
                     .dot => {
                         // Field access
                         _ = try self.nextToken();
@@ -338,7 +340,7 @@ pub const Parser = struct {
                         const e = try self.parseExpressionOps(0);
                         const ep = try self.allocator.create(ExpressionNode);
                         ep.* = e;
-                        const v = self.allocator.create(ExpressionNode);
+                        const v = try self.allocator.create(ExpressionNode);
                         v.* = node;
                         node = ExpressionNode{ .expression = .{ .index = .{ .expr = v, .idx = ep } }, .source = t.source };
                     },
@@ -359,12 +361,12 @@ pub const Parser = struct {
                         const ct = try self.peekToken();
                         if (ct.kind == .closeParen) {
                             _ = try self.nextToken();
-                            const a = self.allocator.alloc(ExpressionNode, 0);
-                            const v = self.allocator.create(ExpressionNode);
+                            const a = try self.allocator.alloc(ExpressionNode, 0);
+                            const v = try self.allocator.create(ExpressionNode);
                             v.* = node;
                             node = ExpressionNode{ .expression = .{ .call = .{ .callee = v, .args = a } }, .source = t.source };
                         } else {
-                            const l = std.ArrayList(ExpressionNode).init(self.allocator);
+                            var l = std.ArrayList(ExpressionNode).init(self.allocator);
                             errdefer l.deinit();
                             const e = try self.parseExpressionOps(0);
                             try l.append(e);
@@ -383,9 +385,9 @@ pub const Parser = struct {
                                 }
                             }
 
-                            const v = self.allocator.create(ExpressionNode);
+                            const v = try self.allocator.create(ExpressionNode);
                             v.* = node;
-                            node = ExpressionNode{ .expression = .{ .call = .{ .calle = v, .args = l.items } }, .source = t.source };
+                            node = ExpressionNode{ .expression = .{ .call = .{ .callee = v, .args = l.items } }, .source = t.source };
                         }
                     },
                     else => break, // Just give up otherwise
@@ -411,11 +413,11 @@ pub const Parser = struct {
                 return expr;
             } else if (firstComma.kind.eq(.comma)) {
                 // We go full tuple mode
-                var tuple = std.ArrayList(i32).init(self.allocator);
+                var tuple = std.ArrayList(ExpressionNode).init(self.allocator);
                 errdefer tuple.deinit();
 
                 while (true) {
-                    const e = try self.parseExpressionOps(self, 0);
+                    const e = try self.parseExpressionOps(0);
                     try tuple.append(e);
                     const t = try self.nextToken();
                     if (t.kind.eq(.comma)) {
@@ -436,13 +438,13 @@ pub const Parser = struct {
         }
 
         if (tag == .openBracket) {
-            var l = std.ArrayList(Expression).init(self.allocator);
+            var l = std.ArrayList(ExpressionNode).init(self.allocator);
             errdefer l.deinit();
 
             if ((try self.peekToken()).kind.eq(.closeBracket)) {
                 _ = try self.nextToken();
             } else while (true) {
-                const e = try self.parseExpressionOps(self, 0);
+                const e = try self.parseExpressionOps(0);
                 try l.append(e);
 
                 const t = try self.nextToken();
@@ -470,16 +472,46 @@ pub const Parser = struct {
 
     pub fn parsePattern(self: *Self) Error!PatternNode {
         _ = self;
+        std.debug.panic("Not implemented yet, sorry", .{});
     }
 
     pub fn parse(self: *Self) Error![]StatementNode {
         var asts = std.ArrayList(StatementNode).init(self.allocator);
         errdefer asts.deinit();
 
-        while (!self.lexer.done()) {
+        while (!self.done()) {
             try asts.append(try self.parseStatement());
         }
 
         return asts.items;
     }
+
+    pub fn done(self: *const Self) bool {
+        return self.lexer.done();
+    }
 };
+
+test "Parser can parse basic expressions" {
+    var error_store: ErrorStore = undefined;
+    errdefer error_store.dumpTesting();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var parser = Parser.init("test.snow", "57 true false null \"hello there\" x", arena.allocator(), &error_store);
+    const a = try parser.parseExpression();
+    const b = try parser.parseExpression();
+    const c = try parser.parseExpression();
+    const d = try parser.parseExpression();
+    const e = try parser.parseExpression();
+    const f = try parser.parseExpression();
+
+    try std.testing.expect(a.expression.number == 57);
+    try std.testing.expect(b.expression.boolean == true);
+    try std.testing.expect(c.expression.boolean == false);
+    try std.testing.expectEqualStrings("null", @tagName(d.expression));
+    try std.testing.expect(std.mem.eql(u8, e.expression.string, "hello there"));
+    try std.testing.expect(std.mem.eql(u8, f.expression.variable, "x"));
+
+    try std.testing.expect(parser.done()); // Parser should say it is done
+}
