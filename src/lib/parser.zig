@@ -134,12 +134,29 @@ pub const Expression = union(enum) {
         expr: *ExpressionNode,
         idx: *ExpressionNode,
     },
-    opcode: struct {
+    binaryOpcode: struct {
         a: *ExpressionNode,
         b: *ExpressionNode,
-        op: enum { Add, Sub, Mult, Div, IntDiv, Power, Mod },
+        op: BinaryOp,
+    },
+    prefixOpcode: struct {
+        expr: *ExpressionNode,
+        op: PrefixOp,
+    },
+    catchOp: struct {
+        expr: *ExpressionNode,
+        body: union(enum) {
+            justExpr: *ExpressionNode,
+            withErr: struct {
+                errVar: []const u8,
+                expr: *ExpressionNode,
+            },
+        },
     },
 };
+
+pub const BinaryOp = enum { Add, Sub, Mult, Div, IntDiv, Power, Mod };
+pub const PrefixOp = enum { Minus, Try };
 
 fn ValueToSExpression(allocator: Allocator, node: anytype) ![]const u8 {
     const t: std.builtin.Type = @typeInfo(@TypeOf(node));
@@ -545,9 +562,78 @@ pub const Parser = struct {
         return Error.SyntaxError;
     }
 
+    fn prefixBindingPower(op: Token) ?struct { bias: usize, op: PrefixOp } {
+        return switch (op.kind) {
+            .tryKeyword => .{ .bias = 100, .op = PrefixOp.Try },
+            .minus => .{ .bias = 99, .op = PrefixOp.Minus },
+            else => null,
+        };
+    }
+
+    fn infixBindingPower(op: Token) ?struct { left: usize, right: usize, op: BinaryOp } {
+        return switch (op.kind) {
+            .plus => .{ .left = 1, .right = 2, .op = BinaryOp.Add },
+            .minus => .{ .left = 1, .right = 2, .op = BinaryOp.Sub },
+            .asterisk => .{ .left = 3, .right = 4, .op = BinaryOp.Mult },
+            .slash => .{ .left = 3, .right = 4, .op = BinaryOp.Div },
+            .intDivision => .{ .left = 3, .right = 4, .op = BinaryOp.IntDiv },
+            .caret => .{ .left = 5, .right = 6, .op = BinaryOp.Power },
+            else => null,
+        };
+    }
+
     pub fn parseExpressionOps(self: *Self, bias: usize) Error!ExpressionNode {
-        _ = bias;
-        return self.parseExpression();
+        const pt = try self.peekToken();
+        if (Self.prefixBindingPower(pt)) |power| {
+            _ = try self.nextToken();
+            var rhs = try self.parseExpressionOps(power.bias);
+            var rhsp = try self.allocator.create(ExpressionNode);
+
+            rhsp.* = rhs;
+
+            return ExpressionNode{
+                .expression = Expression{
+                    .prefixOpcode = .{
+                        .expr = rhsp,
+                        .op = power.op,
+                    },
+                },
+                .source = pt.source,
+            };
+        }
+        var lhs = try self.parseExpression();
+
+        while (!self.done()) {
+            const op = try self.peekToken();
+
+            var maybePower = Self.infixBindingPower(op);
+            if (maybePower) |power| {
+                if (power.left < bias) {
+                    break;
+                }
+
+                _ = try self.nextToken();
+
+                var rhs = try self.parseExpressionOps(power.right);
+
+                var lhsp = try self.allocator.create(ExpressionNode);
+                var rhsp = try self.allocator.create(ExpressionNode);
+
+                lhsp.* = lhs;
+                rhsp.* = rhs;
+
+                lhs.source = op.source;
+                lhs.expression = .{
+                    .binaryOpcode = .{
+                        .a = lhsp,
+                        .b = rhsp,
+                        .op = power.op,
+                    },
+                };
+            } else break;
+        }
+
+        return lhs;
     }
 
     pub fn parsePattern(self: *Self) Error!PatternNode {
@@ -632,4 +718,31 @@ test "Parser can parse complex expressions" {
     try std.testing.expectEqualStrings(e.expression.index.expr.expression.variable, "x");
 
     try std.testing.expect(parser.done()); // Parser should be done by now
+}
+
+test "Parser can understand math" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var error_store = ErrorStore.empty();
+    errdefer error_store.deinit();
+
+    var parser = Parser.init("test.snow", "50 + 20 * 3 ^ 7", arena.allocator(), &error_store);
+
+    const expr = try parser.parseExpressionOps(0);
+
+    const add = expr.expression.binaryOpcode;
+    try std.testing.expect(add.op == BinaryOp.Add);
+    try std.testing.expect(add.a.expression.number == 50);
+
+    const mult = add.b.expression.binaryOpcode;
+    try std.testing.expect(mult.op == BinaryOp.Mult);
+    try std.testing.expect(mult.a.expression.number == 20);
+
+    const power = mult.b.expression.binaryOpcode;
+    try std.testing.expect(power.op == BinaryOp.Power);
+    try std.testing.expect(power.a.expression.number == 3);
+    try std.testing.expect(power.b.expression.number == 7);
+
+    try std.testing.expect(parser.done());
 }
