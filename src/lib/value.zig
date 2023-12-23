@@ -295,14 +295,9 @@ pub const SnowValue = union(enum) {
             },
             .boolean => |b| if (b) 1 else 0,
             .null => 0,
-            .string => {
-                var h: usize = 5381;
-
-                for (self.string.str) |c| {
-                    h = ((h << 5) +% h) +% c;
-                }
-
-                return h;
+            .string => |s| {
+                const str = s.str;
+                return @intCast(std.hash_map.hashString(str));
             },
             .list => |l| @intFromPtr(l),
             .table => |t| @intFromPtr(t),
