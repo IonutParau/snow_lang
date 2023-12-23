@@ -604,6 +604,32 @@ pub const Parser = struct {
             return ExpressionNode{ .expression = .{ .structLiteral = l.items }, .source = token.source };
         }
 
+        if (tag == .bar) {
+            var l = std.ArrayList([]const u8).init(self.allocator);
+            errdefer l.deinit();
+
+            while (true) {
+                const param = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                try l.append(param.kind.identifier);
+
+                const t = try self.nextToken();
+                switch (t.kind) {
+                    .comma => continue,
+                    .bar => break,
+                    else => {
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected , or |", .{}, self.allocator, token.source);
+                        return Error.SyntaxError;
+                    },
+                }
+            }
+
+            const expr = try self.parseExpressionOps(0);
+            var exprp = try self.allocator.create(ExpressionNode);
+            exprp.* = expr;
+
+            return ExpressionNode{ .expression = Expression{ .shortLambda = .{ .args = l.items, .expr = exprp } }, .source = token.source };
+        }
+
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
         return Error.SyntaxError;
     }
@@ -771,7 +797,7 @@ test "Parser can understand math" {
     defer arena.deinit();
 
     var error_store = ErrorStore.empty();
-    errdefer error_store.deinit();
+    errdefer error_store.panic();
 
     var parser = Parser.init("test.snow", "50 + 20 * 3 ^ 7", arena.allocator(), &error_store);
 
@@ -813,4 +839,27 @@ test "Parser can parse even more complex expressions" {
     try std.testing.expectEqual(a.expression.tableLiteral[1].value.expression.number, 10);
 
     try std.testing.expect(parser.done());
+}
+
+test "Parser can parse lambdas" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var error_store = ErrorStore.empty();
+    errdefer error_store.panic();
+
+    var parser = Parser.init("test.snow", "|x, y| x + y", arena.allocator(), &error_store);
+
+    const a = try parser.parseExpression();
+    const short = a.expression.shortLambda;
+
+    try std.testing.expectEqual(short.args.len, 2);
+    try std.testing.expectEqualStrings(short.args[0], "x");
+    try std.testing.expectEqualStrings(short.args[1], "y");
+
+    const shortBody = short.expr.expression.binaryOpcode;
+
+    try std.testing.expectEqual(shortBody.op, BinaryOp.Add);
+    try std.testing.expectEqualStrings(shortBody.a.expression.variable, "x");
+    try std.testing.expectEqualStrings(shortBody.b.expression.variable, "y");
 }
