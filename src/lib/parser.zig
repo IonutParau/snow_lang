@@ -290,14 +290,14 @@ pub const Parser = struct {
         return self.checkDone(try self.lexer.next());
     }
 
-    fn expectNextToken(self: *Self, kind: TokenTag, comptime msg: []const u8) Error!Token {
+    fn expectNextToken(self: *Self, kind: TokenTag, msg: []const u8) Error!Token {
         const token = try self.nextToken();
 
         if (@as(TokenTag, token.kind) == kind) {
             return token;
         }
 
-        self.error_store.* = try ErrorStore.fmt(msg, .{}, self.allocator, token.source);
+        self.error_store.* = try ErrorStore.fmt("{s}", .{msg}, self.allocator, token.source);
         return Error.SyntaxError;
     }
 
@@ -305,14 +305,14 @@ pub const Parser = struct {
         return self.checkDone(try self.lexer.peek());
     }
 
-    fn expectPeekToken(self: *Self, kind: TokenTag, comptime msg: []const u8) Error!Token {
+    fn expectPeekToken(self: *Self, kind: TokenTag, msg: []const u8) Error!Token {
         const token = try self.peekToken();
 
         if (@as(TokenTag, token.kind) == kind) {
             return token;
         }
 
-        self.error_store.* = try ErrorStore.fmt(msg, .{}, self.allocator, token.source);
+        self.error_store.* = try ErrorStore.fmt("{s}", .{msg}, self.allocator, token.source);
         return Error.SyntaxError;
     }
 
@@ -511,7 +511,7 @@ pub const Parser = struct {
                 keyp.* = key;
                 valuep.* = value;
 
-                try l.append(.{ .key = keyp, .value = valuep });
+                try l.append(TablePair{ .field = keyp, .value = valuep });
 
                 const nt = try self.nextToken();
                 if (nt.kind == .comma) {
@@ -523,7 +523,7 @@ pub const Parser = struct {
                 } else if (nt.kind == .closeCurly) {
                     break;
                 } else {
-                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected {} or ,", .{"}"}, self.allocator, nt.source);
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected {s} or ,", .{"}"}, self.allocator, nt.source);
                     return Error.SyntaxError;
                 }
             }
@@ -532,26 +532,72 @@ pub const Parser = struct {
         }
 
         if (tag == .structKeyword) {
-            _ = try self.expectNextToken(.openCurly, "Syntax Error: Expected \\{");
+            _ = try self.expectNextToken(.openCurly, "Syntax Error: Expected {");
             var l = std.ArrayList(StructPair).init(self.allocator);
             errdefer l.deinit();
 
             const ending = try self.peekToken();
             if (ending.kind == .closeCurly) {
+                _ = try self.nextToken();
                 return ExpressionNode{ .expression = .{ .structLiteral = l.items }, .source = token.source };
             }
 
             while (true) {
                 const pt = try self.peekToken();
-                if (pt.kind == .identifier) {
-                    std.debug.panic("Struct fields not implemented yet", .{});
-                } else if (pt.kind == .colon) {
-                    std.debug.panic("Struct metafields not implemented yet", .{});
-                } else if (pt.kind == .funKeyword) {
-                    std.debug.panic("Struct methods not implemented", .{});
+                switch (pt.kind) {
+                    .identifier => {
+                        _ = try self.nextToken();
+                        const field = pt.kind.identifier;
+                        _ = try self.expectNextToken(.assign, "Syntax Error: Expected =");
+                        const val = try self.parseExpressionOps(0);
+                        var valp = try self.allocator.create(ExpressionNode);
+                        valp.* = val;
+                        const pair = StructPair{
+                            .field = field,
+                            .value = valp,
+                            .isMeta = false,
+                        };
+
+                        try l.append(pair);
+                    },
+                    .colon => {
+                        _ = try self.nextToken();
+                        const field = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                        const fieldName = field.kind.identifier;
+
+                        _ = try self.expectNextToken(.assign, "Syntax Error: Expected =");
+                        const val = try self.parseExpressionOps(0);
+                        var valp = try self.allocator.create(ExpressionNode);
+                        valp.* = val;
+                        const pair = StructPair{
+                            .field = fieldName,
+                            .value = valp,
+                            .isMeta = true,
+                        };
+
+                        try l.append(pair);
+                    },
+                    .funKeyword => {
+                        std.debug.panic("Struct methods not implemented", .{});
+                    },
+                    else => {
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected identifier, : or fun", .{}, self.allocator, pt.source);
+                        return Error.SyntaxError;
+                    },
+                }
+
+                const nt = try self.nextToken();
+                if (nt.kind == .comma) {
+                    const npt = try self.peekToken();
+                    if (npt.kind == .closeCurly) {
+                        _ = try self.nextToken();
+                        break;
+                    }
+                    continue;
+                } else if (nt.kind == .closeCurly) {
+                    break;
                 } else {
-                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected identifier, : or fun", .{}, self.allocator, pt.source);
-                    return Error.SyntaxError;
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected {} or ,", .{'}'}, self.allocator, nt.source);
                 }
             }
 
@@ -743,6 +789,28 @@ test "Parser can understand math" {
     try std.testing.expect(power.op == BinaryOp.Power);
     try std.testing.expect(power.a.expression.number == 3);
     try std.testing.expect(power.b.expression.number == 7);
+
+    try std.testing.expect(parser.done());
+}
+
+test "Parser can parse even more complex expressions" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var error_store = ErrorStore.empty();
+    errdefer error_store.panic();
+
+    var parser = Parser.init("test.snow", "{\"x\" = 50, 10 = 10} struct {hello = 50, :stuff = 50}", arena.allocator(), &error_store);
+
+    const a = try parser.parseExpression();
+    const b = try parser.parseExpression();
+    _ = b;
+
+    try std.testing.expectEqual(a.expression.tableLiteral.len, 2);
+    try std.testing.expectEqualStrings(a.expression.tableLiteral[0].field.expression.string, "x");
+    try std.testing.expectEqual(a.expression.tableLiteral[0].value.expression.number, 50);
+    try std.testing.expectEqual(a.expression.tableLiteral[1].field.expression.number, 10);
+    try std.testing.expectEqual(a.expression.tableLiteral[1].value.expression.number, 10);
 
     try std.testing.expect(parser.done());
 }

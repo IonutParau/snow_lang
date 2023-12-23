@@ -181,8 +181,7 @@ pub const SnowValue = union(enum) {
         meta: std.StringHashMap(SnowValue),
     },
     userdata: *struct {
-        // Never disposed, no need for marked.
-        // May want to add OwnedUserData, which can have a finalizer.
+        marked: bool, // marked is for the extra info
         memory: [*]const u8,
         meta: std.StringHashMap(SnowValue),
     },
@@ -227,6 +226,7 @@ pub const SnowValue = union(enum) {
             .list => self.list.marked,
             .table => self.table.marked,
             .structValue => self.structValue.marked,
+            .userdata => self.userdata.marked,
             else => false,
         };
     }
@@ -238,6 +238,7 @@ pub const SnowValue = union(enum) {
             .list => self.list.marked = marked,
             .table => self.table.marked = marked,
             .structValue => self.structValue.marked = marked,
+            .userdata => self.userdata.marked = marked,
             else => {},
         }
     }
@@ -347,10 +348,11 @@ pub const SnowValue = union(enum) {
 
                 return true;
             },
-            .list => |l| l == self.list,
-            .table => |t| t == self.table,
-            .structValue => |s| s == self.structValue,
+            .list => |l| l == other.list,
+            .table => |t| t == other.table,
+            .structValue => |s| s == other.structValue,
             .null => true,
+            .userdata => |u| u == other.userdata,
         };
     }
 };
