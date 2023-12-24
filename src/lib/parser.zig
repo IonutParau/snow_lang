@@ -32,10 +32,6 @@ pub const Statement = union(enum) {
         condition: *ExpressionNode,
         body: []StatementNode,
     },
-    matchStatement: []struct {
-        pattern: *PatternNode,
-        body: *StatementNode,
-    },
     codeblock: []StatementNode,
     returnStatement: ?*ExpressionNode,
     defineLocal: struct {
@@ -52,29 +48,6 @@ pub const Statement = union(enum) {
         callee: *ExpressionNode,
         args: []ExpressionNode,
     },
-};
-
-pub const PatternNode = struct {
-    pattern: Pattern,
-    source: Source,
-};
-
-pub const Pattern = union(enum) {
-    variable: []const u8,
-    field: struct {
-        field: []const u8,
-        of: *PatternNode,
-    },
-    wildcard,
-    defineLocal: []const u8,
-    number: f64,
-    string: []const u8,
-    list: []union(enum) {
-        pattern: *PatternNode,
-        repeating,
-        namedRepeat: []const u8,
-    },
-    tuple: []PatternNode,
 };
 
 pub const ExpressionNode = struct {
@@ -108,19 +81,13 @@ pub const Expression = union(enum) {
         body: *ExpressionNode,
         fallback: *ExpressionNode,
     },
-    matchExpr: []struct {
-        pattern: *PatternNode,
-        response: *ExpressionNode,
-    },
-    codeblock: []ExpressionNode,
-    returnExpr: ?*ExpressionNode,
     shortLambda: struct {
         args: []const []const u8,
         expr: *ExpressionNode,
     },
     longLambda: struct {
         args: []const []const u8,
-        body: []ExpressionNode,
+        body: []StatementNode,
     },
     call: struct {
         callee: *ExpressionNode,
@@ -223,18 +190,82 @@ pub const Parser = struct {
     }
 
     pub fn alloc(self: *Self, x: anytype) !*@TypeOf(x) {
-        var p = try self.allocator.alloc(@TypeOf(x));
+        var p = try self.allocator.create(@TypeOf(x));
         p.* = x;
         return p;
+    }
+
+    pub fn parseBlock(self: *Self) Error![]StatementNode {
+        var statements = std.ArrayList(StatementNode).init(self.allocator);
+        errdefer statements.deinit();
+
+        _ = try self.expectNextToken(.openCurly, "Syntax Error: Expected {");
+
+        while (true) {
+            const pt = try self.peekToken();
+            if (pt.kind.eq(.closeCurly)) {
+                _ = try self.nextToken();
+                break;
+            } else if (pt.kind.eq(.semicolon)) {
+                _ = try self.nextToken();
+                continue;
+            } else {
+                try statements.append(try self.parseStatement());
+            }
+        }
+
+        return statements.items;
     }
 
     pub fn parseStatement(self: *Self) Error!StatementNode {
         var token = try self.nextToken();
 
         if (token.kind.eq(.localKeyword)) {
+            // Maybe function
+            a: {
+                const pt = try self.peekToken();
+
+                if (!pt.kind.eq(.funKeyword)) {
+                    break :a;
+                }
+                _ = try self.nextToken();
+
+                const name = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+
+                _ = try self.expectNextToken(.openParen, "Syntax Error: Expected (");
+                var argnames = std.ArrayList([]const u8).init(self.allocator);
+                errdefer argnames.deinit();
+
+                const npt = try self.peekToken();
+                if (npt.kind != .closeParen) {
+                    while (true) {
+                        const arg = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                        try argnames.append(arg.kind.identifier);
+
+                        const t = try self.nextToken();
+                        if (t.kind == .closeParen) {
+                            break;
+                        } else if (t.kind == .comma) {
+                            continue;
+                        } else {
+                            self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected , or )", .{}, self.allocator, t.source);
+                            return Error.SyntaxError;
+                        }
+                    }
+                }
+
+                const block = try self.parseBlock();
+
+                return StatementNode{ .statement = Statement{ .defineFunction = .{
+                    .name = name.kind.identifier,
+                    .args = argnames.items,
+                    .local = true,
+                    .body = block,
+                } }, .source = pt.source };
+            }
+
             // Name
             const name = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
-            const local_name = try self.allocator.dupe(u8, name.kind.identifier);
             const t = try self.peekToken();
             if (t.kind.eq(.assign)) {
                 _ = try self.nextToken();
@@ -242,10 +273,69 @@ pub const Parser = struct {
                 var e = try self.allocator.create(ExpressionNode);
                 e.* = expr;
 
-                return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = e } }, .source = token.source };
+                return StatementNode{ .statement = .{ .defineLocal = .{ .name = name.kind.identifier, .val = e } }, .source = token.source };
             }
 
-            return StatementNode{ .statement = .{ .defineLocal = .{ .name = local_name, .val = null } }, .source = token.source };
+            return StatementNode{ .statement = .{ .defineLocal = .{ .name = name.kind.identifier, .val = null } }, .source = token.source };
+        }
+
+        if (token.kind.eq(.funKeyword)) {
+            const name = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+
+            _ = try self.expectNextToken(.openParen, "Syntax Error: Expected (");
+            var argnames = std.ArrayList([]const u8).init(self.allocator);
+            errdefer argnames.deinit();
+
+            const npt = try self.peekToken();
+            if (npt.kind != .closeParen) {
+                while (true) {
+                    const arg = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                    try argnames.append(arg.kind.identifier);
+
+                    const t = try self.nextToken();
+                    if (t.kind == .closeParen) {
+                        break;
+                    } else if (t.kind == .comma) {
+                        continue;
+                    } else {
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected , or )", .{}, self.allocator, t.source);
+                        return Error.SyntaxError;
+                    }
+                }
+            }
+
+            const block = try self.parseBlock();
+
+            return StatementNode{ .statement = Statement{ .defineFunction = .{
+                .name = name.kind.identifier,
+                .args = argnames.items,
+                .local = true,
+                .body = block,
+            } }, .source = token.source };
+        }
+
+        if (token.kind.eq(.doKeyword)) {
+            const block = try self.parseBlock();
+
+            return StatementNode{ .statement = Statement{ .codeblock = block }, .source = token.source };
+        }
+
+        if (token.kind.eq(.returnKeyword)) {
+            if (self.done()) {
+                return StatementNode{ .statement = Statement{ .returnStatement = null }, .source = token.source };
+            }
+
+            const pt = try self.peekToken();
+            if (pt.kind == .closeCurly) {
+                return StatementNode{ .statement = Statement{ .returnStatement = null }, .source = token.source };
+            }
+            if (pt.kind == .semicolon) {
+                return StatementNode{ .statement = Statement{ .returnStatement = null }, .source = token.source };
+            }
+
+            const exprp = try self.alloc(try self.parseExpressionOps(0));
+
+            return StatementNode{ .statement = Statement{ .returnStatement = exprp }, .source = token.source };
         }
 
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, self.lexer.source);
@@ -630,6 +720,34 @@ pub const Parser = struct {
             return ExpressionNode{ .expression = Expression{ .shortLambda = .{ .args = l.items, .expr = exprp } }, .source = token.source };
         }
 
+        if (tag == .funKeyword) {
+            var l = std.ArrayList([]const u8).init(self.allocator);
+            errdefer l.deinit();
+
+            _ = try self.expectNextToken(.openParen, "Syntax Error: Expected (");
+            while (true) {
+                const param = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+                try l.append(param.kind.identifier);
+
+                const t = try self.nextToken();
+                switch (t.kind) {
+                    .comma => continue,
+                    .closeParen => break,
+                    else => {
+                        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected , or )", .{}, self.allocator, token.source);
+                        return Error.SyntaxError;
+                    },
+                }
+            }
+
+            const block = try self.parseBlock();
+
+            return ExpressionNode{ .expression = Expression{ .longLambda = .{
+                .args = l.items,
+                .body = block,
+            } }, .source = token.source };
+        }
+
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
         return Error.SyntaxError;
     }
@@ -708,17 +826,15 @@ pub const Parser = struct {
         return lhs;
     }
 
-    pub fn parsePattern(self: *Self) Error!PatternNode {
-        const token = try self.nextToken();
-        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected pattern", .{}, self.allocator, token.source);
-        return errors.SnowError.SyntaxError;
-    }
-
     pub fn parse(self: *Self) Error![]StatementNode {
         var asts = std.ArrayList(StatementNode).init(self.allocator);
         errdefer asts.deinit();
 
         while (!self.done()) {
+            const pt = try self.peekToken();
+            if (pt.kind.eq(.semicolon)) {
+                continue;
+            }
             try asts.append(try self.parseStatement());
         }
 
@@ -848,7 +964,7 @@ test "Parser can parse lambdas" {
     var error_store = ErrorStore.empty();
     errdefer error_store.panic();
 
-    var parser = Parser.init("test.snow", "|x, y| x + y", arena.allocator(), &error_store);
+    var parser = Parser.init("test.snow", "|x, y| x + y fun(x, y) { return x + y }", arena.allocator(), &error_store);
 
     const a = try parser.parseExpression();
     const short = a.expression.shortLambda;
@@ -862,4 +978,22 @@ test "Parser can parse lambdas" {
     try std.testing.expectEqual(shortBody.op, BinaryOp.Add);
     try std.testing.expectEqualStrings(shortBody.a.expression.variable, "x");
     try std.testing.expectEqualStrings(shortBody.b.expression.variable, "y");
+
+    const b = try parser.parseExpression();
+    const long = b.expression.longLambda;
+
+    try std.testing.expectEqual(long.args.len, 2);
+    try std.testing.expectEqualStrings(long.args[0], "x");
+    try std.testing.expectEqualStrings(long.args[1], "y");
+    try std.testing.expectEqual(long.body.len, 1);
+
+    const longRet = long.body[0].statement.returnStatement;
+
+    try std.testing.expect(longRet != null); // Other tests validate x + y
+
+    try std.testing.expect(parser.done());
+}
+
+test "Parser can parse functions and calls" {
+    // TODO: test
 }
