@@ -48,6 +48,11 @@ pub const Statement = union(enum) {
         callee: *ExpressionNode,
         args: []ExpressionNode,
     },
+    method: struct {
+        expr: *ExpressionNode,
+        name: []const u8,
+        args: []const ExpressionNode,
+    },
 };
 
 pub const ExpressionNode = struct {
@@ -96,6 +101,11 @@ pub const Expression = union(enum) {
     field: struct {
         expr: *ExpressionNode,
         name: []const u8,
+    },
+    method: struct {
+        expr: *ExpressionNode,
+        name: []const u8,
+        args: []const ExpressionNode,
     },
     index: struct {
         expr: *ExpressionNode,
@@ -338,7 +348,48 @@ pub const Parser = struct {
             return StatementNode{ .statement = Statement{ .returnStatement = exprp }, .source = token.source };
         }
 
-        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, self.lexer.source);
+        if (token.kind.eq(.ifKeyword)) {
+            const expr = try self.parseExpressionOps(0);
+            var exprp = try self.allocator.create(ExpressionNode);
+            exprp.* = expr;
+            const block = try self.parseBlock();
+
+            if (self.done()) {
+                return StatementNode{ .statement = Statement{ .ifStatement = .{ .condition = exprp, .body = block, .fallback = null } }, .source = token.source };
+            }
+
+            const pt = try self.peekToken();
+            if (pt.kind == .elseKeyword) {
+                _ = try self.nextToken();
+                const fallback = try self.parseBlock();
+                return StatementNode{ .statement = Statement{ .ifStatement = .{ .condition = exprp, .body = block, .fallback = fallback } }, .source = token.source };
+            }
+
+            return StatementNode{ .statement = Statement{ .ifStatement = .{ .condition = exprp, .body = block, .fallback = null } }, .source = token.source };
+        }
+
+        const s = self.lexer.source;
+        const maybeExpr = self.parseExpression();
+        if (maybeExpr) |expr_node| {
+            const expr: Expression = expr_node.expression;
+            const source: Source = expr_node.source;
+            switch (expr) {
+                .call => |c| {
+                    return StatementNode{ .statement = Statement{ .call = .{ .callee = c.callee, .args = c.args } }, .source = source };
+                },
+                .method => |m| {
+                    return StatementNode{ .statement = Statement{ .method = .{ .expr = m.expr, .name = m.name, .args = m.args } }, .source = source };
+                },
+                else => {
+                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Unexpected expression", .{}, self.allocator, s);
+                    return Error.SyntaxError;
+                },
+            }
+        } else {
+            self.error_store.deinit(); // Delete the other error, to not leak memory
+        }
+
+        self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, s);
         return Error.SyntaxError;
     }
 
@@ -433,6 +484,37 @@ pub const Parser = struct {
                         const v = try self.allocator.create(ExpressionNode);
                         v.* = node;
                         node = ExpressionNode{ .expression = .{ .field = .{ .expr = v, .name = field.kind.identifier } }, .source = t.source };
+                    },
+                    .colon => {
+                        // Method call
+                        _ = try self.nextToken();
+                        const field = try self.expectNextToken(.identifier, "Syntax Error: Expected identifier");
+
+                        var args = std.ArrayList(ExpressionNode).init(self.allocator);
+                        _ = try self.expectNextToken(.openParen, "Syntax Error: Expected (");
+                        const pt = try self.peekToken();
+                        if (pt.kind != .closeParen) {
+                            while (true) {
+                                const expr = try self.parseExpressionOps(0);
+                                try args.append(expr);
+
+                                const nt = try self.nextToken();
+                                if (nt.kind == .closeParen) {
+                                    break;
+                                } else if (nt.kind == .comma) {
+                                    continue;
+                                } else {
+                                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,");
+                                    return Error.SyntaxError;
+                                }
+                            }
+                        }
+
+                        const v = try self.allocator.create(ExpressionNode);
+                        v.* = node;
+                        node = ExpressionNode{ .expression = Expression{
+                            .method = .{ .expr = v, .name = field.kind.identifier, .args = args.items },
+                        }, .source = t.source };
                     },
                     .openBracket => {
                         // Potential index
