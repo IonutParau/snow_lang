@@ -92,6 +92,7 @@ pub const SnowTokenType = union(enum) {
     trueKeyword,
     falseKeyword,
     nullKeyword,
+    thenKeyword,
 
     pub fn eq(self: SnowTokenType, other: SnowTokenType) bool {
         const typeInfo: std.builtin.Type = @typeInfo(SnowTokenType);
@@ -374,7 +375,7 @@ pub const SnowLexer = struct {
 const testing = std.testing;
 
 test "Lexing" {
-    const code = "( ) [ ] { } + - * / // ^ > < >= <= == != = . .. ... , | ; 5 5.3 5.32 x hello fun in is local while if else do try catch return continue break and or not true false null struct 'hello there'";
+    const code = "( ) [ ] { } + - * / // ^ > < >= <= == != = . .. ... , | ; 5 5.3 5.32 x hello fun in is local while if else do try catch return continue break and or not true false null struct then 'hello there'";
     var error_store = errors.SnowErrorStore.empty();
     errdefer error_store.deinit();
 
@@ -433,6 +434,7 @@ test "Lexing" {
         .falseKeyword,
         .nullKeyword,
         .structKeyword,
+        .thenKeyword,
         .{ .stringLiteral = "hello there" },
     };
 

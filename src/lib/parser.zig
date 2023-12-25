@@ -844,6 +844,30 @@ pub const Parser = struct {
             } }, .source = token.source };
         }
 
+        if (tag == .ifKeyword) {
+            const expr = try self.parseExpressionOps(0);
+            var exprp = try self.allocator.create(ExpressionNode);
+            exprp.* = expr;
+
+            _ = try self.expectNextToken(.thenKeyword, "Syntax Error: Expected then");
+            const thenExpr = try self.parseExpressionOps(0);
+            var thenExprP = try self.allocator.create(ExpressionNode);
+            thenExprP.* = thenExpr;
+
+            _ = try self.expectNextToken(.elseKeyword, "Syntax Error: Expected else");
+            const elseExpr = try self.parseExpressionOps(0);
+            var elseExprP = try self.allocator.create(ExpressionNode);
+            elseExprP.* = elseExpr;
+
+            return ExpressionNode{ .expression = Expression{
+                .ifExpr = .{
+                    .condition = exprp,
+                    .body = thenExprP,
+                    .fallback = elseExprP,
+                },
+            }, .source = token.source };
+        }
+
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected expression", .{}, self.allocator, token.source);
         return Error.SyntaxError;
     }
