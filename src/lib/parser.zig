@@ -381,6 +381,20 @@ pub const Parser = struct {
                     return StatementNode{ .statement = Statement{ .method = .{ .expr = m.expr, .name = m.name, .args = m.args } }, .source = source };
                 },
                 else => {
+                    if (Self.isValidAssignee(expr_node)) {
+                        const at = try self.expectNextToken(TokenTag.assign, "Syntax Error: Expected =");
+                        const val = try self.parseExpressionOps(0);
+                        const valp = try self.allocator.create(ExpressionNode);
+                        valp.* = val;
+
+                        const exprp = try self.allocator.create(ExpressionNode);
+                        exprp.* = expr_node;
+
+                        return StatementNode{ .statement = Statement{
+                            .assign = .{ .expr = exprp, .to = valp },
+                        }, .source = at.source };
+                    }
+
                     self.error_store.* = try ErrorStore.fmt("Syntax Error: Unexpected expression", .{}, self.allocator, s);
                     return Error.SyntaxError;
                 },
