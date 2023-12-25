@@ -399,8 +399,10 @@ pub const Parser = struct {
                     return Error.SyntaxError;
                 },
             }
-        } else {
+        } else |e| {
             self.error_store.deinit(); // Delete the other error, to not leak memory
+            self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, s);
+            return e;
         }
 
         self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected statement", .{}, self.allocator, s);
@@ -518,7 +520,7 @@ pub const Parser = struct {
                                 } else if (nt.kind == .comma) {
                                     continue;
                                 } else {
-                                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,");
+                                    self.error_store.* = try ErrorStore.fmt("Syntax Error: Expected ) or ,", .{}, self.allocator, nt.source);
                                     return Error.SyntaxError;
                                 }
                             }
