@@ -132,8 +132,24 @@ pub const Expression = union(enum) {
     },
 };
 
-pub const BinaryOp = enum { Add, Sub, Mult, Div, IntDiv, Power, Mod };
-pub const PrefixOp = enum { Minus, Try };
+pub const BinaryOp = enum {
+    Add,
+    Sub,
+    Mult,
+    Div,
+    IntDiv,
+    Power,
+    Mod,
+    Equals,
+    NotEquals,
+    LessThan,
+    GreaterThan,
+    LessOrEqual,
+    GreaterOrEqual,
+    And,
+    Or,
+};
+pub const PrefixOp = enum { Minus, Try, Not };
 
 fn ValueToSExpression(allocator: Allocator, node: anytype) ![]const u8 {
     const t: std.builtin.Type = @typeInfo(@TypeOf(node));
@@ -878,18 +894,30 @@ pub const Parser = struct {
         return switch (op.kind) {
             .tryKeyword => .{ .bias = 100, .op = PrefixOp.Try },
             .minus => .{ .bias = 99, .op = PrefixOp.Minus },
+            .notKeyword => .{ .bias = 98, .op = PrefixOp.Not },
             else => null,
         };
     }
 
     fn infixBindingPower(op: Token) ?struct { left: usize, right: usize, op: BinaryOp } {
         return switch (op.kind) {
-            .plus => .{ .left = 1, .right = 2, .op = BinaryOp.Add },
-            .minus => .{ .left = 1, .right = 2, .op = BinaryOp.Sub },
-            .asterisk => .{ .left = 3, .right = 4, .op = BinaryOp.Mult },
-            .slash => .{ .left = 3, .right = 4, .op = BinaryOp.Div },
-            .intDivision => .{ .left = 3, .right = 4, .op = BinaryOp.IntDiv },
-            .caret => .{ .left = 5, .right = 6, .op = BinaryOp.Power },
+            // These are bias 1, 2
+            .andKeyword => .{ .left = 1, .right = 2, .op = BinaryOp.And },
+            .orKeyword => .{ .left = 1, .right = 2, .op = BinaryOp.Or },
+            // All comparisons are bias 3, 4
+            .equals => .{ .left = 3, .right = 4, .op = BinaryOp.Equals },
+            .notEquals => .{ .left = 3, .right = 4, .op = BinaryOp.NotEquals },
+            .greater => .{ .left = 3, .right = 4, .op = BinaryOp.GreaterThan },
+            .less => .{ .left = 3, .right = 4, .op = BinaryOp.LessThan },
+            .greaterEqual => .{ .left = 3, .right = 4, .op = BinaryOp.GreaterOrEqual },
+            .lessEqual => .{ .left = 3, .right = 4, .op = BinaryOp.LessOrEqual },
+            // Ops (5, 6 and above)
+            .plus => .{ .left = 5, .right = 6, .op = BinaryOp.Add },
+            .minus => .{ .left = 5, .right = 6, .op = BinaryOp.Sub },
+            .asterisk => .{ .left = 7, .right = 8, .op = BinaryOp.Mult },
+            .slash => .{ .left = 7, .right = 8, .op = BinaryOp.Div },
+            .intDivision => .{ .left = 7, .right = 8, .op = BinaryOp.IntDiv },
+            .caret => .{ .left = 9, .right = 10, .op = BinaryOp.Power },
             else => null,
         };
     }
@@ -914,6 +942,31 @@ pub const Parser = struct {
             };
         }
         var lhs = try self.parseExpression();
+        if (self.done()) {
+            return lhs;
+        }
+
+        const lhspt = try self.peekToken();
+        if (lhspt.kind == .catchKeyword) {
+            _ = try self.nextToken();
+            var lhsp = try self.allocator.create(ExpressionNode);
+            lhsp.* = lhs;
+
+            const expr = try self.parseExpressionOps(0);
+            var exprp = try self.allocator.create(ExpressionNode);
+            exprp.* = expr;
+            lhs = ExpressionNode{
+                .expression = Expression{
+                    .catchOp = .{
+                        .expr = lhsp,
+                        .body = .{
+                            .justExpr = exprp,
+                        },
+                    },
+                },
+                .source = lhspt.source,
+            };
+        }
 
         while (!self.done()) {
             const op = try self.peekToken();
@@ -1118,4 +1171,23 @@ test "Parser can parse lambdas" {
 
 test "Parser can parse functions and calls" {
     // TODO: test
+}
+
+test "Parser can understand advanced error handling" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var error_store = ErrorStore.empty();
+    errdefer error_store.dump();
+
+    var parser = Parser.init("test.snow", "try foo() foo() catch print('o no bug')", arena.allocator(), &error_store);
+
+    const tryExpr = try parser.parseExpressionOps(0);
+    const catchExpr = try parser.parseExpressionOps(0);
+
+    try std.testing.expect(tryExpr.expression.prefixOpcode.op == PrefixOp.Try);
+    try std.testing.expect(tryExpr.expression.prefixOpcode.expr.expression.call.args.len == 0); // Just to ensure it understands its a function call
+
+    try std.testing.expect(catchExpr.expression.catchOp.expr.expression.call.args.len == 0);
+    try std.testing.expect(catchExpr.expression.catchOp.body.justExpr.expression.call.args.len == 1);
 }

@@ -62,8 +62,8 @@ pub const SnowTokenType = union(enum) {
     mod, // %
     greater, // >
     less, // <
-    greaterThan, // >=
-    lessThan, // <=
+    greaterEqual, // >=
+    lessEqual, // <=
     assign, // =
     equals, // ==
     notEquals, // !=
@@ -194,8 +194,8 @@ pub const SnowLexer = struct {
             .{ .kind = .closeCurly, .text = "}" },
             .{ .kind = .comma, .text = "," },
             .{ .kind = .semicolon, .text = ";" },
-            .{ .kind = .greaterThan, .text = ">=" },
-            .{ .kind = .lessThan, .text = "<=" },
+            .{ .kind = .greaterEqual, .text = ">=" },
+            .{ .kind = .lessEqual, .text = "<=" },
             .{ .kind = .greater, .text = ">" },
             .{ .kind = .less, .text = "<" },
             .{ .kind = .equals, .text = "==" },
@@ -398,8 +398,8 @@ test "Lexing" {
         .caret,
         .greater,
         .less,
-        .greaterThan,
-        .lessThan,
+        .greaterEqual,
+        .lessEqual,
         .equals,
         .notEquals,
         .assign,
