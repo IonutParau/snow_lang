@@ -93,7 +93,7 @@ pub const SnowStack = struct {
 
     const Self = @This();
 
-    pub fn new(allocator: Allocator, store: *SnowErrorStore) !Self {
+    pub fn init(allocator: Allocator, store: *SnowErrorStore) !Self {
         var frame = try allocator.alloc(SnowCell, SNOW_STACK_SIZE);
         frame.len = 0;
 
@@ -156,6 +156,10 @@ pub const SnowStack = struct {
     }
 };
 
+const runtime = @import("runtime.zig");
+
+const SnowVM = runtime.SnowVM;
+
 pub const SnowValue = union(enum) {
     number: f64,
     boolean: bool,
@@ -185,7 +189,18 @@ pub const SnowValue = union(enum) {
         memory: [*]const u8,
         meta: std.StringHashMap(SnowValue),
     },
-    null: void,
+    function: *struct {
+        marked: bool,
+        constants: []SnowValue,
+        upvals: []SnowCell,
+        bytecode: []const u8,
+    },
+    nativeFunction: *struct {
+        marked: bool,
+        upvals: []SnowCell,
+        fp: *const fn (vm: *SnowVM) callconv(.C) void,
+    },
+    nullValue: void,
 
     const Self = @This();
 
@@ -214,6 +229,16 @@ pub const SnowValue = union(enum) {
             .userdata => {
                 self.userdata.meta.deinit();
                 allocator.destroy(self.userdata);
+            },
+            .function => |f| {
+                allocator.free(f.constants);
+                allocator.free(f.upvals);
+                allocator.free(f.bytecode);
+                allocator.destroy(f);
+            },
+            .nativeFunction => |f| {
+                allocator.free(f.upvals);
+                allocator.destroy(f);
             },
             else => {},
         }
