@@ -18,6 +18,8 @@ pub const GarbageCollector = struct {
     err: *SnowErrorStore,
     cells: LinkedList(SnowCell),
     values: LinkedList(SnowValue),
+    threshold: usize,
+    count: usize,
 
     const Self = @This();
 
@@ -30,6 +32,8 @@ pub const GarbageCollector = struct {
             .err = err,
             .cells = cells,
             .values = vals,
+            .threshold = 200,
+            .count = 0,
         };
     }
 
@@ -54,6 +58,7 @@ pub const GarbageCollector = struct {
         const nodep = try self.allocator.create(@TypeOf(node));
         nodep.* = node;
         self.values.prepend(nodep);
+        self.count += 1;
         return &nodep.data;
     }
 
@@ -62,6 +67,7 @@ pub const GarbageCollector = struct {
         const nodep = try self.allocator.create(@TypeOf(node));
         nodep.* = node;
         self.cells.prepend(nodep);
+        self.count += 1;
     }
 
     pub fn mark(self: *const Self, stack: SnowStack) void {
@@ -88,6 +94,7 @@ pub const GarbageCollector = struct {
                     node.data.deinit(self.allocator);
                     self.values.remove(node);
                     self.allocator.destroy(node);
+                    self.count -= 1;
                 }
             }
         }
@@ -102,14 +109,24 @@ pub const GarbageCollector = struct {
                     node.data.deinit(self.allocator);
                     self.cells.remove(node);
                     self.allocator.destroy(node);
+                    self.count -= 1;
                 }
             }
         }
     }
 
-    // Mark and Sweep
+    // literally Mark and Sweep
     pub fn collect(self: *Self, stack: SnowStack) void {
         self.mark(stack);
         self.sweep();
+    }
+
+    // Maybe mark and sweep
+    pub fn maybeCollect(self: *Self, stack: SnowStack) void {
+        if (self.count >= self.threshold) {
+            self.mark(stack);
+            self.sweep();
+            self.threshold = @max(self.count * 2, 200);
+        }
     }
 };

@@ -114,6 +114,7 @@ const CallFrame = struct {
     item_count: usize,
     upvalues: []Cell,
     bytecode: ?SnowBytecodeReader,
+    returned_value: ?Value,
 };
 
 const CallStackSize = 4096;
