@@ -83,6 +83,15 @@ pub const SnowErrorStore = struct {
         std.debug.panic("{s}\nAt: {s}:{}:{}\n", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column });
     }
 
+    pub fn fatalError(self: *Self) noreturn {
+        if (self.msg == null) {
+            // Unknown / Out Of Memory
+            std.debug.panic("[ SNOW ] Fatal Error! Out of Memory!\nAt: {s}:{}:{}\n", .{ self.error_source.file, self.error_source.line, self.error_source.column });
+        }
+
+        std.debug.panic("[ SNOW ] Fatal Error! {s}\nAt: {s}:{}:{}\n", .{ self.msg.?, self.error_source.file, self.error_source.line, self.error_source.column });
+    }
+
     pub fn deinit(self: *Self) void {
         if (self.msg_allocator) |allocator| {
             if (self.msg) |msg| {

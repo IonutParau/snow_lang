@@ -111,7 +111,6 @@ const Error = errors.SnowError;
 const Allocator = std.mem.Allocator;
 
 const CallFrame = struct {
-    item_count: usize,
     upvalues: []Cell,
     bytecode: ?SnowBytecodeReader,
     returned_value: ?Value,
@@ -119,12 +118,21 @@ const CallFrame = struct {
 
 const CallStackSize = 4096;
 
+fn defaultErrorHandler(vm: *SnowVM, out_of_memory: bool) callconv(.C) noreturn {
+    if (out_of_memory) {
+        std.debug.panic("[ SNOW ] Fatal Error! Out of Memory!\nError Source Unavailable\n", .{});
+    }
+    vm.error_store.panic();
+}
+
 pub const SnowVM = struct {
     stack: Stack,
     collector: gc.GarbageCollector,
     error_store: *ErrorStore,
+    current_source: lexing.SnowSource,
     allocator: Allocator,
     call_stack: []CallFrame,
+    error_handler: *const fn (*SnowVM, bool) callconv(.C) noreturn,
 
     pub fn init(allocator: Allocator) !SnowVM {
         const store = try allocator.create(ErrorStore);
@@ -136,6 +144,7 @@ pub const SnowVM = struct {
             .error_store = store,
             .allocator = allocator,
             .call_stack = call_stack,
+            .error_handler = &defaultErrorHandler,
         };
     }
 
@@ -143,5 +152,48 @@ pub const SnowVM = struct {
         self.stack.deinit();
         self.collector.deinit();
         self.allocator.destroy(self.error_store);
+    }
+
+    pub fn ensureFrameSize(self: *SnowVM, count: usize) !void {
+        if (self.stack.frame.len < count) {
+            try self.stack.pushNullCells(count - self.stack.frame.len, self.current_source);
+        }
+    }
+
+    pub fn assertRegisterExists(self: *SnowVM, register: usize) !void {
+        if (register >= self.call_stack.frame.len) {
+            self.error_store.* = try ErrorStore.fmt("Runtime Error: Internals attempted out-of-bound register usage (reg {}, frame size {})", .{
+                register,
+                self.call_stack.frame.len,
+            });
+            return Error.RuntimeError;
+        }
+    }
+
+    pub fn copy(self: *SnowVM, src: usize, dest: usize) !void {
+        try self.assetRegisterExists(src);
+        try self.assetRegisterExists(dest);
+        self.stack.getCell(dest).write(self.stack.setCell(src));
+    }
+
+    pub fn promoteToUpvalue(self: *SnowVM, reg: usize) !void {
+        var cell = self.stack.getCell(reg);
+        switch (cell.*) {
+            .local => |v| {
+                const shared = try self.collector.makeSharedCell(v);
+                cell.* = shared;
+            },
+            .shared => {},
+        }
+    }
+
+    pub fn createString(self: *SnowVM, reg: usize, str: []const u8) !void {
+        const s = try self.collector.makeString(str);
+        self.stack.getCell(reg).write(s);
+    }
+
+    pub fn createCString(self: *SnowVM, reg: usize, cstr: [*:0]const u8) !void {
+        const len = std.mem.len(cstr);
+        return self.createString(reg, cstr[0..len]);
     }
 };

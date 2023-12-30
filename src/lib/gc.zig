@@ -70,6 +70,101 @@ pub const GarbageCollector = struct {
         self.count += 1;
     }
 
+    pub fn makeSharedCell(self: *Self, value: SnowValue) !SnowCell {
+        const data = try self.allocator.create(struct { marked: bool, value: *SnowValue });
+        errdefer self.allocator.destroy(data);
+
+        const valuep = try self.allocator.create(SnowValue);
+        errdefer self.allocator.destroy(valuep);
+
+        valuep.* = value;
+
+        data.marked = false;
+        data.value = valuep;
+
+        const cell = SnowCell{
+            .shared = data,
+        };
+
+        self.addCell(cell);
+
+        return cell;
+    }
+
+    pub fn makeTuple(self: *Self, size: usize) !SnowValue {
+        const data = try self.allocator.create(struct { marked: bool, values: []SnowValue });
+        errdefer self.allocator.destroy(data);
+
+        const buffer = try self.allocator.alloc(SnowValue, size);
+        errdefer self.allocator.free(buffer);
+
+        data.marked = false;
+        data.values = buffer;
+
+        var tuple = SnowValue{
+            .tuple = data,
+        };
+
+        try self.addValue(tuple); // The pointer is useful when we need exactly THAT value, but a copy is fine (because its just a pointer)
+
+        return tuple;
+    }
+
+    pub fn makeString(self: *Self, data: []const u8) !SnowValue {
+        const vdata = try self.allocator.create(struct { marked: bool, str: []const u8 });
+        errdefer self.allocator.destroy(data);
+
+        const buffer: []const u8 = try self.allocator.alloc(u8, data.len);
+        errdefer self.allocator.free(buffer);
+        @memcpy(buffer, data);
+
+        vdata.marked = false;
+        vdata.str = buffer;
+
+        var str = SnowValue{
+            .string = vdata,
+        };
+
+        try self.addValue(str);
+
+        return str;
+    }
+
+    pub fn makeList(self: *Self, capacity: usize) !SnowValue {
+        const data = try self.allocator.create(struct { marked: bool, values: std.ArrayList(SnowValue) });
+        errdefer self.allocator.destroy(data);
+
+        const list = try std.ArrayList(SnowValue).initCapacity(@max(capacity, 5));
+        errdefer list.deinit();
+
+        data.marked = false;
+        data.values = list;
+
+        var l = SnowValue{
+            .list = data,
+        };
+
+        try self.addValue(l);
+
+        return l;
+    }
+
+    pub fn makeTable(self: *Self) !SnowValue {
+        var data = try self.allocator.create(struct { marked: bool, table: values.SnowTable });
+        errdefer self.allocator.destroy(data);
+
+        const table = values.SnowTable.init(self.allocator);
+        errdefer table.deinit();
+
+        var t = SnowValue{
+            .table = data,
+        };
+
+        try self.addValue(t);
+
+        return t;
+    }
+
     pub fn mark(self: *const Self, stack: SnowStack) void {
         _ = self;
         var frame = stack.wholeStackFrame();
