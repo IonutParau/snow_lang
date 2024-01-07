@@ -223,10 +223,23 @@ pub const SnowValue = union(enum) {
                 allocator.destroy(self.table);
             },
             .structValue => {
+                var mapKeys = self.structValue.map.keyIterator();
+                while (mapKeys.next()) |key| {
+                    allocator.free(key.*);
+                }
                 self.structValue.map.deinit();
+                var metaKeys = self.structValue.meta.keyIterator();
+                while (metaKeys.next()) |key| {
+                    allocator.free(key.*);
+                }
+                self.structValue.meta.deinit();
                 allocator.destroy(self.structValue);
             },
             .userdata => {
+                var metaKeys = self.userdata.meta.keyIterator();
+                while (metaKeys.next()) |key| {
+                    allocator.free(key.*);
+                }
                 self.userdata.meta.deinit();
                 allocator.destroy(self.userdata);
             },
