@@ -64,9 +64,8 @@ pub const SnowCell = union(enum) {
         switch (self) {
             .shared => |s| {
                 // Delete struct
-                defer allocator.destroy(s);
-                defer allocator.destroy(s.value);
-                s.value.deinit(allocator);
+                allocator.destroy(s.value);
+                allocator.destroy(s);
             },
             .local => {},
         }
@@ -139,11 +138,16 @@ pub const SnowStack = struct {
         self.frame.len = size;
     }
 
-    pub fn pushCell(self: *Self, n: usize, source: SnowSource) SnowError!void {
+    pub fn pushNullCells(self: *Self, n: usize, source: SnowSource) SnowError!void {
+        var i = self.frame.len;
         self.frame.len += n;
         if (self.frame_idx + self.frame.len >= self.frame_end) {
             self.store.* = try SnowErrorStore.fmt("Stack Overflow", .{}, self.allocator, source);
             return SnowError.RuntimeError;
+        }
+        var j: usize = 0;
+        while (j < n) : (j += 1) {
+            self.frame[i + j] = SnowCell{ .local = .nullValue };
         }
     }
 
@@ -159,6 +163,8 @@ pub const SnowStack = struct {
 const runtime = @import("runtime.zig");
 
 const SnowVM = runtime.SnowVM;
+
+pub const SnowTable = std.HashMap(SnowValue, SnowValue, TableHashMapContext, std.hash_map.default_max_load_percentage);
 
 pub const SnowValue = union(enum) {
     number: f64,
@@ -177,7 +183,7 @@ pub const SnowValue = union(enum) {
     },
     table: *struct {
         marked: bool,
-        map: std.HashMap(SnowValue, SnowValue, TableHashMapContext, std.hash_map.default_max_load_percentage),
+        map: SnowTable,
     },
     structValue: *struct {
         marked: bool,

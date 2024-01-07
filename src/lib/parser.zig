@@ -1169,10 +1169,6 @@ test "Parser can parse lambdas" {
     try std.testing.expect(parser.done());
 }
 
-test "Parser can parse functions and calls" {
-    // TODO: test
-}
-
 test "Parser can understand advanced error handling" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
